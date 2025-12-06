@@ -1,0 +1,1548 @@
+
+<!doctype html>
+<html lang="id">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistem Absensi MA AR-RIDHO</title>
+  <script src="/_sdk/element_sdk.js"></script>
+  <script src="/_sdk/data_sdk.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      box-sizing: border-box;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    .pulse-animation {
+      animation: pulse 2s ease-in-out infinite;
+    }
+    
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+    
+    .toast {
+      animation: slideIn 0.3s ease-out;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .animate-spin {
+      animation: spin 1s linear infinite;
+    }
+  </style>
+  <style>@view-transition { navigation: auto; }</style>
+ </head>
+ <body class="w-full min-h-full bg-gradient-to-br from-blue-50 to-indigo-100">
+  <div id="app" class="w-full min-h-full"></div>
+  <script>
+    const GOOGLE_SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwPbHkKgQOQAEyfvf-4nwQSYDlRX9oVx9hL6Xm5KnFa-ISlrt4uxXi8tc60iJHUSlo9/exec';
+    const GOOGLE_SHEETS_REKAP_URL = 'https://script.google.com/macros/s/AKfycbzZr9oFkuAhbrGQX6Ba1zJYRb7ks7-JJcxrfdi65AuqJAzmayV_Gpjw4pH248veIQ6w/exec';
+    
+    const STUDENTS_DATA = [
+      { rfid: '0001134892', nama: 'Farhan Ramadhani', kelas: '10' },
+      { rfid: '0002290336', nama: 'Hatikurrahman', kelas: '10' },
+      { rfid: '0001696971', nama: 'Syaiful Bahri', kelas: '10' },
+      { rfid: '0001200735', nama: 'Febriansyah', kelas: '11' },
+      { rfid: '0002245415', nama: 'Mahmud', kelas: '11' },
+      { rfid: '0001699259', nama: 'Aril Maulana', kelas: '12' },
+      { rfid: '0006063666', nama: 'Moh Rifqi', kelas: '12' },
+      { rfid: '0001157118', nama: 'Zainal Efendi', kelas: '12' },
+      { rfid: '0001134658', nama: 'Ach Ready', kelas: '12' },
+      { rfid: '0001742383', nama: 'Muhammad Nashrulloh', kelas: '12' },
+      { rfid: '0001190469', nama: 'Syaiful Rizal', kelas: '12' },
+      { rfid: '0001130224', nama: 'Ach Wanente', kelas: '12' }
+    ];
+
+    const defaultConfig = {
+      school_name: 'MA AR-RIDHO',
+      scan_instruction: 'Tempelkan Kartu RFID Anda'
+    };
+
+    let currentUser = null;
+    let currentPage = 'login';
+    let allRecords = [];
+    let rfidInput = '';
+    let currentTime = new Date();
+    let filterKelas = 'all';
+    let filterTanggal = '';
+
+    function getCurrentDate() {
+      const now = new Date();
+      return now.toISOString().split('T')[0];
+    }
+
+    function getCurrentTime() {
+      const now = new Date();
+      return now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function getJamPeriode() {
+      const hour = new Date().getHours();
+      if (hour >= 7 && hour < 9) return 'jam1';
+      if (hour >= 9 && hour < 11) return 'jam2';
+      if (hour >= 11 && hour < 13) return 'jam3';
+      return 'jam1';
+    }
+
+    function showToast(message, type = 'success') {
+      const toastContainer = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      const bgColor = type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500';
+      
+      toast.className = `toast ${bgColor} text-white px-6 py-4 rounded-lg shadow-lg mb-2`;
+      toast.textContent = message;
+      
+      toastContainer.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    async function sendToGoogleSheets(records) {
+      const promises = records.map((record, index) => {
+        // Konversi jam ke format H/S/I
+        const getStatus = (jam) => {
+          if (!jam || jam === '') return '';
+          if (jam === 'Sakit') return 'S';
+          if (jam === 'Izin') return 'I';
+          return 'H'; // Hadir (waktu atau "Hadir")
+        };
+
+        return fetch(GOOGLE_SHEETS_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            no: index + 1,
+            rfid: record.rfid,
+            nama: record.nama,
+            kelas: record.kelas,
+            jam1: getStatus(record.jam1),
+            jam2: getStatus(record.jam2),
+            jam3: getStatus(record.jam3)
+          })
+        });
+      });
+
+      await Promise.all(promises);
+    }
+
+    async function sendRekapToGoogleSheets(rekapData, month) {
+      const promises = rekapData.map((data, index) => {
+        return fetch(GOOGLE_SHEETS_REKAP_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            no: index + 1,
+            rfid: data.rfid,
+            nama: data.nama,
+            kelas: data.kelas,
+            bulan: month,
+            jam1_hadir: data.jam1.hadir,
+            jam1_sakit: data.jam1.sakit,
+            jam1_izin: data.jam1.izin,
+            jam2_hadir: data.jam2.hadir,
+            jam2_sakit: data.jam2.sakit,
+            jam2_izin: data.jam2.izin,
+            jam3_hadir: data.jam3.hadir,
+            jam3_sakit: data.jam3.sakit,
+            jam3_izin: data.jam3.izin,
+            total_hadir: data.total.hadir,
+            total_sakit: data.total.sakit,
+            total_izin: data.total.izin
+          })
+        });
+      });
+
+      await Promise.all(promises);
+    }
+
+    function renderLogin() {
+      const config = window.elementSdk?.config || defaultConfig;
+      return `
+        <div class="flex items-center justify-center min-h-full p-4">
+          <div class="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+            <div class="text-center mb-8">
+              <div class="bg-indigo-600 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg class="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                </svg>
+              </div>
+              <h1 class="text-3xl font-bold text-gray-800">${config.school_name}</h1>
+              <p class="text-gray-600 mt-2">Sistem Absensi RFID</p>
+            </div>
+            
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="username-input">Username</label>
+                <input type="text" id="username-input" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent" placeholder="Masukkan username">
+              </div>
+              
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="password-input">Password</label>
+                <input type="password" id="password-input" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent" placeholder="Masukkan password">
+              </div>
+              
+              <button id="login-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition duration-200 shadow-lg">
+                Masuk
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDashboard() {
+      const config = window.elementSdk?.config || defaultConfig;
+      const today = getCurrentDate();
+      const todayRecords = allRecords.filter(r => r.tanggal === today && r.type === 'attendance');
+      
+      const hadir = todayRecords.filter(r => r.status === 'Hadir').length;
+      const sakit = todayRecords.filter(r => r.status === 'Sakit').length;
+      const izin = todayRecords.filter(r => r.status === 'Izin').length;
+      const alpha = STUDENTS_DATA.length - hadir - sakit - izin;
+      
+      const belumAbsen = STUDENTS_DATA.filter(student => {
+        return !todayRecords.some(r => r.rfid === student.rfid);
+      });
+
+      return `
+        <div class="p-6 space-y-6">
+          <div class="bg-white rounded-xl shadow-md p-6">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6">Dashboard Absensi</h2>
+            
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+              <div class="bg-green-50 border-l-4 border-green-500 p-4 rounded-lg">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="text-sm text-gray-600">Hadir</p>
+                    <p class="text-3xl font-bold text-green-600">${hadir}</p>
+                  </div>
+                  <svg class="w-12 h-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                </div>
+              </div>
+              
+              <div class="bg-yellow-50 border-l-4 border-yellow-500 p-4 rounded-lg">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="text-sm text-gray-600">Sakit</p>
+                    <p class="text-3xl font-bold text-yellow-600">${sakit}</p>
+                  </div>
+                  <svg class="w-12 h-12 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                </div>
+              </div>
+              
+              <div class="bg-blue-50 border-l-4 border-blue-500 p-4 rounded-lg">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="text-sm text-gray-600">Izin</p>
+                    <p class="text-3xl font-bold text-blue-600">${izin}</p>
+                  </div>
+                  <svg class="w-12 h-12 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                  </svg>
+                </div>
+              </div>
+              
+              <div class="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="text-sm text-gray-600">Alpha</p>
+                    <p class="text-3xl font-bold text-red-600">${alpha}</p>
+                  </div>
+                  <svg class="w-12 h-12 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+              <h3 class="font-semibold text-red-800 mb-3 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+                Siswa Belum Absen Hari Ini (${belumAbsen.length})
+              </h3>
+              ${belumAbsen.length > 0 ? `
+                <div class="max-h-48 overflow-y-auto">
+                  <ul class="space-y-2">
+                    ${belumAbsen.map(s => `
+                      <li class="text-sm text-gray-700 bg-white px-3 py-2 rounded">
+                        <span class="font-medium">${s.nama}</span> - Kelas ${s.kelas} <span class="text-gray-500">(${s.rfid})</span>
+                      </li>
+                    `).join('')}
+                  </ul>
+                </div>
+              ` : '<p class="text-sm text-gray-600">Semua siswa sudah absen hari ini! 🎉</p>'}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderScan() {
+      const config = window.elementSdk?.config || defaultConfig;
+      return `
+        <div class="p-6 space-y-6">
+          <div class="bg-white rounded-xl shadow-md p-6">
+            <div class="text-center mb-8">
+              <div id="clock" class="text-6xl font-bold text-indigo-600 mb-2"></div>
+              <div id="date" class="text-xl text-gray-600"></div>
+            </div>
+
+            <div class="bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-8 text-white text-center mb-6">
+              <div class="pulse-animation mb-4">
+                <svg class="w-24 h-24 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
+                </svg>
+              </div>
+              <h2 class="text-3xl font-bold mb-2">${config.scan_instruction}</h2>
+              <p class="text-lg opacity-90">Mode: <span id="scan-mode" class="font-semibold">Scan Cepat</span></p>
+            </div>
+
+            <div class="space-y-4">
+              <div class="grid grid-cols-4 gap-3">
+                <button id="mode-cepat" class="mode-btn bg-green-500 hover:bg-green-600 text-white font-bold py-4 px-2 rounded-lg transition duration-200 text-sm">
+                  <svg class="w-6 h-6 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                  </svg>
+                  Scan Cepat
+                </button>
+                <button id="mode-jam1" class="mode-btn bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-2 rounded-lg transition duration-200 text-sm">
+                  <svg class="w-6 h-6 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                  Jam 1
+                </button>
+                <button id="mode-jam2" class="mode-btn bg-purple-500 hover:bg-purple-600 text-white font-bold py-4 px-2 rounded-lg transition duration-200 text-sm">
+                  <svg class="w-6 h-6 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                  Jam 2
+                </button>
+                <button id="mode-jam3" class="mode-btn bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 px-2 rounded-lg transition duration-200 text-sm">
+                  <svg class="w-6 h-6 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                  Jam 3
+                </button>
+              </div>
+
+              <div class="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-3">
+                <p class="text-sm text-gray-700 text-center">
+                  <span class="font-semibold">💡 Mode Aktif:</span> <span id="mode-info" class="text-indigo-600 font-bold">Scan Cepat - Otomatis deteksi jam periode</span>
+                </p>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="rfid-auto-input">Scan RFID Otomatis</label>
+                <input type="text" id="rfid-auto-input" class="w-full px-4 py-3 border-4 border-indigo-500 rounded-lg focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 bg-yellow-50 text-lg font-mono" placeholder="Fokus di sini - Scan kartu RFID secara otomatis" autocomplete="off">
+                <p class="text-sm text-gray-600 mt-2">💡 Klik input ini, lalu scan kartu RFID Anda!</p>
+              </div>
+            </div>
+          </div>
+
+          <div id="recent-scans" class="bg-white rounded-xl shadow-md p-6">
+            <h3 class="text-xl font-bold text-gray-800 mb-4">Scan Terakhir</h3>
+            <div id="recent-scans-list" class="space-y-2"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAbsensi() {
+      const config = window.elementSdk?.config || defaultConfig;
+      const today = getCurrentDate();
+      
+      const filteredRecords = allRecords
+        .filter(r => r.type === 'attendance')
+        .filter(r => filterKelas === 'all' || r.kelas === filterKelas)
+        .filter(r => !filterTanggal || r.tanggal === filterTanggal);
+
+      const groupedByDate = {};
+      filteredRecords.forEach(record => {
+        if (!groupedByDate[record.tanggal]) {
+          groupedByDate[record.tanggal] = {};
+        }
+        groupedByDate[record.tanggal][record.rfid] = record;
+      });
+
+      const displayStudents = filterKelas === 'all' 
+        ? STUDENTS_DATA 
+        : STUDENTS_DATA.filter(s => s.kelas === filterKelas);
+
+      return `
+        <div class="p-6 space-y-6">
+          <div class="bg-white rounded-xl shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+              <h2 class="text-2xl font-bold text-gray-800">Data Absensi</h2>
+              <div class="flex gap-2">
+                <button id="add-manual-btn" class="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg transition duration-200 flex items-center">
+                  <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                  </svg>
+                  Absensi Manual
+                </button>
+                <button id="sync-sheets-btn" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition duration-200 flex items-center">
+                  <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                  </svg>
+                  <span id="sync-sheets-text">Kirim ke Spreadsheet</span>
+                </button>
+                <button id="export-btn" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg transition duration-200 flex items-center">
+                  <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                  </svg>
+                  Export CSV
+                </button>
+              </div>
+            </div>
+
+            <div class="flex gap-4 mb-6">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="filter-kelas">Filter Kelas</label>
+                <select id="filter-kelas" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                  <option value="all">Semua Kelas</option>
+                  <option value="10">Kelas 10</option>
+                  <option value="11">Kelas 11</option>
+                  <option value="12">Kelas 12</option>
+                </select>
+              </div>
+              
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="filter-tanggal">Filter Tanggal</label>
+                <input type="date" id="filter-tanggal" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+              </div>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full">
+                <thead class="bg-indigo-600 text-white">
+                  <tr>
+                    <th class="px-4 py-3 text-left">No</th>
+                    <th class="px-4 py-3 text-left">RFID</th>
+                    <th class="px-4 py-3 text-left">Nama Siswa</th>
+                    <th class="px-4 py-3 text-left">Kelas</th>
+                    <th class="px-4 py-3 text-center">Jam 1</th>
+                    <th class="px-4 py-3 text-center">Jam 2</th>
+                    <th class="px-4 py-3 text-center">Jam 3</th>
+                    <th class="px-4 py-3 text-left">Tanggal</th>
+                    <th class="px-4 py-3 text-center">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                  ${displayStudents.map((student, index) => {
+                    const recordKey = filterTanggal || today;
+                    const record = groupedByDate[recordKey]?.[student.rfid];
+                    
+                    let jumlahHadir = 0;
+                    if (record) {
+                      if (record.jam1 && record.jam1 !== 'Sakit' && record.jam1 !== 'Izin') jumlahHadir++;
+                      if (record.jam2 && record.jam2 !== 'Sakit' && record.jam2 !== 'Izin') jumlahHadir++;
+                      if (record.jam3 && record.jam3 !== 'Sakit' && record.jam3 !== 'Izin') jumlahHadir++;
+                    }
+                    
+                    return `
+                      <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3">${index + 1}</td>
+                        <td class="px-4 py-3 font-mono text-sm">${student.rfid}</td>
+                        <td class="px-4 py-3 font-medium">${student.nama}</td>
+                        <td class="px-4 py-3">${student.kelas}</td>
+                        <td class="px-4 py-3 text-center">
+                          ${record?.jam1 ? `
+                            <div class="flex flex-col items-center">
+                              <span class="text-green-600 font-semibold text-xs">${record.jam1}</span>
+                              ${record.jam1 !== 'Sakit' && record.jam1 !== 'Izin' ? '<span class="text-green-700 font-bold text-xs mt-1">✓ Hadir</span>' : ''}
+                            </div>
+                          ` : '<span class="text-gray-400">-</span>'}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                          ${record?.jam2 ? `
+                            <div class="flex flex-col items-center">
+                              <span class="text-blue-600 font-semibold text-xs">${record.jam2}</span>
+                              ${record.jam2 !== 'Sakit' && record.jam2 !== 'Izin' ? '<span class="text-blue-700 font-bold text-xs mt-1">✓ Hadir</span>' : ''}
+                            </div>
+                          ` : '<span class="text-gray-400">-</span>'}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                          ${record?.jam3 ? `
+                            <div class="flex flex-col items-center">
+                              <span class="text-purple-600 font-semibold text-xs">${record.jam3}</span>
+                              ${record.jam3 !== 'Sakit' && record.jam3 !== 'Izin' ? '<span class="text-purple-700 font-bold text-xs mt-1">✓ Hadir</span>' : ''}
+                            </div>
+                          ` : '<span class="text-gray-400">-</span>'}
+                        </td>
+                        <td class="px-4 py-3 text-sm">${record?.tanggal || '-'}</td>
+                        <td class="px-4 py-3 text-center">
+                          ${record ? `
+                            <button class="delete-record-btn text-red-500 hover:text-red-700" data-id="${record.id}">
+                              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                              </svg>
+                            </button>
+                          ` : ''}
+                        </td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="manual-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+            <h3 class="text-xl font-bold text-gray-800 mb-4">Absensi Manual</h3>
+            
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="manual-student">Pilih Siswa</label>
+                <select id="manual-student" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                  <option value="">-- Pilih Siswa --</option>
+                  ${STUDENTS_DATA.map(s => `<option value="${s.rfid}">${s.nama} (Kelas ${s.kelas})</option>`).join('')}
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="manual-jam">Pilih Jam Periode</label>
+                <select id="manual-jam" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                  <option value="jam1">Jam 1 (07:00 - 09:00)</option>
+                  <option value="jam2">Jam 2 (09:00 - 11:00)</option>
+                  <option value="jam3">Jam 3 (11:00 - 13:00)</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="manual-status">Status Kehadiran</label>
+                <select id="manual-status" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                  <option value="Hadir">Hadir</option>
+                  <option value="Sakit">Sakit</option>
+                  <option value="Izin">Izin</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="manual-tanggal">Tanggal</label>
+                <input type="date" id="manual-tanggal" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent" value="${today}">
+              </div>
+
+              <div class="flex gap-2">
+                <button id="save-manual-btn" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 rounded-lg transition duration-200">
+                  Simpan
+                </button>
+                <button id="cancel-manual-btn" class="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 rounded-lg transition duration-200">
+                  Batal
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderRekap() {
+      const currentMonth = new Date().toISOString().slice(0, 7);
+      const monthRecords = allRecords.filter(r => r.tanggal.startsWith(currentMonth) && r.type === 'attendance');
+
+      const studentStats = STUDENTS_DATA.map(student => {
+        const records = monthRecords.filter(r => r.rfid === student.rfid);
+        
+        let jam1Hadir = 0, jam1Sakit = 0, jam1Izin = 0;
+        let jam2Hadir = 0, jam2Sakit = 0, jam2Izin = 0;
+        let jam3Hadir = 0, jam3Sakit = 0, jam3Izin = 0;
+        
+        records.forEach(r => {
+          if (r.jam1) {
+            if (r.jam1 === 'Hadir' || (r.jam1 !== 'Sakit' && r.jam1 !== 'Izin')) {
+              jam1Hadir++;
+            } else if (r.jam1 === 'Sakit') {
+              jam1Sakit++;
+            } else if (r.jam1 === 'Izin') {
+              jam1Izin++;
+            }
+          }
+          
+          if (r.jam2) {
+            if (r.jam2 === 'Hadir' || (r.jam2 !== 'Sakit' && r.jam2 !== 'Izin')) {
+              jam2Hadir++;
+            } else if (r.jam2 === 'Sakit') {
+              jam2Sakit++;
+            } else if (r.jam2 === 'Izin') {
+              jam2Izin++;
+            }
+          }
+          
+          if (r.jam3) {
+            if (r.jam3 === 'Hadir' || (r.jam3 !== 'Sakit' && r.jam3 !== 'Izin')) {
+              jam3Hadir++;
+            } else if (r.jam3 === 'Sakit') {
+              jam3Sakit++;
+            } else if (r.jam3 === 'Izin') {
+              jam3Izin++;
+            }
+          }
+        });
+
+        const totalHadir = jam1Hadir + jam2Hadir + jam3Hadir;
+        const totalSakit = jam1Sakit + jam2Sakit + jam3Sakit;
+        const totalIzin = jam1Izin + jam2Izin + jam3Izin;
+
+        return { 
+          ...student, 
+          jam1: { hadir: jam1Hadir, sakit: jam1Sakit, izin: jam1Izin },
+          jam2: { hadir: jam2Hadir, sakit: jam2Sakit, izin: jam2Izin },
+          jam3: { hadir: jam3Hadir, sakit: jam3Sakit, izin: jam3Izin },
+          total: { hadir: totalHadir, sakit: totalSakit, izin: totalIzin }
+        };
+      });
+
+      return `
+        <div class="p-6 space-y-6">
+          <div class="bg-white rounded-xl shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+              <h2 class="text-2xl font-bold text-gray-800">Rekap Absensi Bulanan</h2>
+              <button id="sync-rekap-btn" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition duration-200 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                </svg>
+                <span id="sync-rekap-text">Kirim ke Spreadsheet</span>
+              </button>
+            </div>
+            
+            <div class="mb-4">
+              <label class="block text-sm font-medium text-gray-700 mb-2" for="rekap-bulan">Pilih Bulan</label>
+              <input type="month" id="rekap-bulan" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent" value="${currentMonth}">
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead class="bg-indigo-600 text-white">
+                  <tr>
+                    <th class="px-3 py-3 text-left" rowspan="2">No</th>
+                    <th class="px-3 py-3 text-left" rowspan="2">RFID</th>
+                    <th class="px-3 py-3 text-left" rowspan="2">Nama Siswa</th>
+                    <th class="px-3 py-3 text-left" rowspan="2">Kelas</th>
+                    <th class="px-3 py-3 text-center border-l border-white" colspan="3">Jam 1</th>
+                    <th class="px-3 py-3 text-center border-l border-white" colspan="3">Jam 2</th>
+                    <th class="px-3 py-3 text-center border-l border-white" colspan="3">Jam 3</th>
+                  </tr>
+                  <tr>
+                    <th class="px-2 py-2 text-center border-l border-white text-xs">H</th>
+                    <th class="px-2 py-2 text-center text-xs">S</th>
+                    <th class="px-2 py-2 text-center text-xs">I</th>
+                    <th class="px-2 py-2 text-center border-l border-white text-xs">H</th>
+                    <th class="px-2 py-2 text-center text-xs">S</th>
+                    <th class="px-2 py-2 text-center text-xs">I</th>
+                    <th class="px-2 py-2 text-center border-l border-white text-xs">H</th>
+                    <th class="px-2 py-2 text-center text-xs">S</th>
+                    <th class="px-2 py-2 text-center text-xs">I</th>
+                    <th class="px-2 py-2 text-center border-l border-white text-xs">H</th>
+                    <th class="px-2 py-2 text-center text-xs">S</th>
+                    <th class="px-2 py-2 text-center text-xs">I</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                  ${studentStats.map((student, index) => `
+                    <tr class="hover:bg-gray-50">
+                      <td class="px-3 py-3">${index + 1}</td>
+                      <td class="px-3 py-3 font-mono text-xs">${student.rfid}</td>
+                      <td class="px-3 py-3 font-medium">${student.nama}</td>
+                      <td class="px-3 py-3">${student.kelas}</td>
+                      <td class="px-2 py-3 text-center border-l">
+                        <span class="px-2 py-1 bg-green-100 text-green-800 rounded font-semibold text-xs">${student.jam1.hadir}</span>
+                      </td>
+                      <td class="px-2 py-3 text-center">
+                        <span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded font-semibold text-xs">${student.jam1.sakit}</span>
+                      </td>
+                      <td class="px-2 py-3 text-center">
+                        <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded font-semibold text-xs">${student.jam1.izin}</span>
+                      </td>
+                      <td class="px-2 py-3 text-center border-l">
+                        <span class="px-2 py-1 bg-green-100 text-green-800 rounded font-semibold text-xs">${student.jam2.hadir}</span>
+                      </td>
+                      <td class="px-2 py-3 text-center">
+                        <span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded font-semibold text-xs">${student.jam2.sakit}</span>
+                      </td>
+                      <td class="px-2 py-3 text-center">
+                        <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded font-semibold text-xs">${student.jam2.izin}</span>
+                      </td>
+                      <td class="px-2 py-3 text-center border-l">
+                        <span class="px-2 py-1 bg-green-100 text-green-800 rounded font-semibold text-xs">${student.jam3.hadir}</span>
+                      </td>
+                      <td class="px-2 py-3 text-center">
+                        <span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded font-semibold text-xs">${student.jam3.sakit}</span>
+                      </td>
+                      <td class="px-2 py-3 text-center">
+                        <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded font-semibold text-xs">${student.jam3.izin}</span>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderSiswa() {
+      return `
+        <div class="p-6 space-y-6">
+          <div class="bg-white rounded-xl shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+              <h2 class="text-2xl font-bold text-gray-800">Data Siswa</h2>
+              <button id="add-student-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition duration-200 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                Tambah Siswa
+              </button>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full">
+                <thead class="bg-indigo-600 text-white">
+                  <tr>
+                    <th class="px-4 py-3 text-left">No</th>
+                    <th class="px-4 py-3 text-left">RFID</th>
+                    <th class="px-4 py-3 text-left">Nama Siswa</th>
+                    <th class="px-4 py-3 text-left">Kelas</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                  ${STUDENTS_DATA.map((student, index) => `
+                    <tr class="hover:bg-gray-50">
+                      <td class="px-4 py-3">${index + 1}</td>
+                      <td class="px-4 py-3 font-mono text-sm">${student.rfid}</td>
+                      <td class="px-4 py-3 font-medium">${student.nama}</td>
+                      <td class="px-4 py-3">${student.kelas}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="student-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+            <h3 class="text-xl font-bold text-gray-800 mb-4">Tambah Siswa Baru</h3>
+            
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="new-rfid">Nomor RFID</label>
+                <input type="text" id="new-rfid" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent" placeholder="Contoh: 0001234567">
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="new-nama">Nama Lengkap</label>
+                <input type="text" id="new-nama" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent" placeholder="Nama siswa">
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2" for="new-kelas">Kelas</label>
+                <select id="new-kelas" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                  <option value="10">10</option>
+                  <option value="11">11</option>
+                  <option value="12">12</option>
+                </select>
+              </div>
+
+              <div class="flex gap-2">
+                <button id="save-student-btn" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 rounded-lg transition duration-200">
+                  Simpan
+                </button>
+                <button id="cancel-student-btn" class="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 rounded-lg transition duration-200">
+                  Batal
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function render() {
+      const app = document.getElementById('app');
+      const config = window.elementSdk?.config || defaultConfig;
+      
+      if (!currentUser) {
+        app.innerHTML = renderLogin();
+        attachLoginListeners();
+        return;
+      }
+
+      app.innerHTML = `
+        <div class="flex flex-col h-full">
+          <nav class="bg-indigo-900 text-white">
+            <div class="flex items-center justify-between px-6 py-4">
+              <div>
+                <h1 class="text-2xl font-bold">${config.school_name}</h1>
+                <p class="text-indigo-300 text-sm">Sistem Absensi</p>
+              </div>
+
+              <div class="flex items-center gap-2">
+                <button class="nav-btn px-4 py-2 rounded-lg ${currentPage === 'dashboard' ? 'bg-indigo-700' : 'hover:bg-indigo-800'}" data-page="dashboard">
+                  <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+                  </svg>
+                  Dashboard
+                </button>
+
+                <button class="nav-btn px-4 py-2 rounded-lg ${currentPage === 'scan' ? 'bg-indigo-700' : 'hover:bg-indigo-800'}" data-page="scan">
+                  <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path>
+                  </svg>
+                  Scan RFID
+                </button>
+
+                <button class="nav-btn px-4 py-2 rounded-lg ${currentPage === 'absensi' ? 'bg-indigo-700' : 'hover:bg-indigo-800'}" data-page="absensi">
+                  <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                  </svg>
+                  Data Absensi
+                </button>
+
+                <button class="nav-btn px-4 py-2 rounded-lg ${currentPage === 'rekap' ? 'bg-indigo-700' : 'hover:bg-indigo-800'}" data-page="rekap">
+                  <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                  </svg>
+                  Rekap Bulanan
+                </button>
+
+                <button class="nav-btn px-4 py-2 rounded-lg ${currentPage === 'siswa' ? 'bg-indigo-700' : 'hover:bg-indigo-800'}" data-page="siswa">
+                  <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path>
+                  </svg>
+                  Data Siswa
+                </button>
+
+                <div class="border-l border-indigo-700 h-8 mx-2"></div>
+
+                <button id="logout-btn" class="px-4 py-2 rounded-lg hover:bg-indigo-800">
+                  <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                  </svg>
+                  Keluar
+                </button>
+              </div>
+            </div>
+          </nav>
+
+          <main class="flex-1 overflow-y-auto">
+            <div id="content"></div>
+          </main>
+        </div>
+
+        <div id="toast-container" class="fixed top-4 right-4 z-50"></div>
+      `;
+
+      renderContent();
+      attachNavigationListeners();
+    }
+
+    function renderContent() {
+      const content = document.getElementById('content');
+      
+      switch(currentPage) {
+        case 'dashboard':
+          content.innerHTML = renderDashboard();
+          break;
+        case 'scan':
+          content.innerHTML = renderScan();
+          attachScanListeners();
+          startClock();
+          updateRecentScans();
+          break;
+        case 'absensi':
+          content.innerHTML = renderAbsensi();
+          attachAbsensiListeners();
+          break;
+        case 'rekap':
+          content.innerHTML = renderRekap();
+          attachRekapListeners();
+          break;
+        case 'siswa':
+          content.innerHTML = renderSiswa();
+          attachSiswaListeners();
+          break;
+      }
+    }
+
+    function attachLoginListeners() {
+      const loginBtn = document.getElementById('login-btn');
+      const usernameInput = document.getElementById('username-input');
+      const passwordInput = document.getElementById('password-input');
+
+      const handleLogin = () => {
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value.trim();
+
+        if (username === 'admin' && password === 'admin') {
+          currentUser = { username };
+          currentPage = 'dashboard';
+          render();
+          showToast('Login berhasil! Selamat datang.', 'success');
+        } else {
+          showToast('Username atau password salah!', 'error');
+        }
+      };
+
+      loginBtn.addEventListener('click', handleLogin);
+      passwordInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') handleLogin();
+      });
+    }
+
+    function attachNavigationListeners() {
+      const navBtns = document.querySelectorAll('.nav-btn');
+      navBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentPage = btn.dataset.page;
+          renderContent();
+        });
+      });
+
+      const logoutBtn = document.getElementById('logout-btn');
+      logoutBtn.addEventListener('click', () => {
+        currentUser = null;
+        currentPage = 'login';
+        render();
+        showToast('Anda telah keluar', 'info');
+      });
+    }
+
+    function attachScanListeners() {
+      const rfidAutoInput = document.getElementById('rfid-auto-input');
+      const modeCepatBtn = document.getElementById('mode-cepat');
+      const modeJam1Btn = document.getElementById('mode-jam1');
+      const modeJam2Btn = document.getElementById('mode-jam2');
+      const modeJam3Btn = document.getElementById('mode-jam3');
+      const scanModeDisplay = document.getElementById('scan-mode');
+      const modeInfoDisplay = document.getElementById('mode-info');
+      
+      let currentScanMode = 'cepat';
+      let scanInProgress = false;
+
+      function updateModeDisplay() {
+        const modeBtns = document.querySelectorAll('.mode-btn');
+        modeBtns.forEach(btn => {
+          btn.classList.remove('ring-4', 'ring-white', 'shadow-lg', 'scale-105');
+        });
+
+        let modeText = '';
+        let infoText = '';
+        let activeBtn = null;
+
+        switch(currentScanMode) {
+          case 'cepat':
+            modeText = 'Scan Cepat';
+            infoText = 'Scan Cepat - Otomatis deteksi jam periode';
+            activeBtn = modeCepatBtn;
+            break;
+          case 'jam1':
+            modeText = 'Jam 1';
+            infoText = 'Jam 1 (07:00 - 09:00)';
+            activeBtn = modeJam1Btn;
+            break;
+          case 'jam2':
+            modeText = 'Jam 2';
+            infoText = 'Jam 2 (09:00 - 11:00)';
+            activeBtn = modeJam2Btn;
+            break;
+          case 'jam3':
+            modeText = 'Jam 3';
+            infoText = 'Jam 3 (11:00 - 13:00)';
+            activeBtn = modeJam3Btn;
+            break;
+        }
+
+        if (activeBtn) {
+          activeBtn.classList.add('ring-4', 'ring-white', 'shadow-lg', 'scale-105');
+        }
+
+        scanModeDisplay.textContent = modeText;
+        modeInfoDisplay.textContent = infoText;
+      }
+
+      modeCepatBtn.addEventListener('click', () => {
+        currentScanMode = 'cepat';
+        updateModeDisplay();
+        rfidAutoInput.focus();
+        showToast('Mode Scan Cepat aktif - otomatis deteksi jam', 'info');
+      });
+
+      modeJam1Btn.addEventListener('click', () => {
+        currentScanMode = 'jam1';
+        updateModeDisplay();
+        rfidAutoInput.focus();
+        showToast('Mode Jam 1 aktif', 'info');
+      });
+
+      modeJam2Btn.addEventListener('click', () => {
+        currentScanMode = 'jam2';
+        updateModeDisplay();
+        rfidAutoInput.focus();
+        showToast('Mode Jam 2 aktif', 'info');
+      });
+
+      modeJam3Btn.addEventListener('click', () => {
+        currentScanMode = 'jam3';
+        updateModeDisplay();
+        rfidAutoInput.focus();
+        showToast('Mode Jam 3 aktif', 'info');
+      });
+
+      updateModeDisplay();
+
+      const handleAutoScan = async () => {
+        if (scanInProgress) return;
+        
+        const rfidValue = rfidAutoInput.value.trim();
+        
+        if (!rfidValue) {
+          return;
+        }
+
+        const student = STUDENTS_DATA.find(s => s.rfid === rfidValue);
+        
+        if (!student) {
+          showToast('RFID tidak terdaftar!', 'error');
+          rfidAutoInput.value = '';
+          rfidAutoInput.focus();
+          return;
+        }
+
+        scanInProgress = true;
+        rfidAutoInput.disabled = true;
+
+        const jamPeriode = currentScanMode === 'cepat' ? getJamPeriode() : currentScanMode;
+        const today = getCurrentDate();
+        const currentTimeStr = getCurrentTime();
+        const existingRecord = allRecords.find(r => 
+          r.rfid === rfidValue && r.tanggal === today && r.type === 'attendance'
+        );
+
+        if (existingRecord) {
+          if (existingRecord[jamPeriode] && existingRecord[jamPeriode] !== '') {
+            showToast(`❌ ${student.nama} sudah scan ${jamPeriode.toUpperCase().replace('JAM', 'Jam ')} pada ${existingRecord[jamPeriode]}`, 'error');
+            rfidAutoInput.value = '';
+            scanInProgress = false;
+            rfidAutoInput.disabled = false;
+            rfidAutoInput.focus();
+            return;
+          }
+          
+          existingRecord[jamPeriode] = currentTimeStr;
+          existingRecord.waktu_scan = currentTimeStr;
+          existingRecord.status = 'Hadir';
+          
+          const updateResult = await window.dataSdk.update(existingRecord);
+          
+          if (updateResult.isOk) {
+            showToast(`✅ ${student.nama} - ${jamPeriode.toUpperCase().replace('JAM', 'Jam ')} berhasil dicatat (${currentTimeStr})`, 'success');
+            rfidAutoInput.value = '';
+            updateRecentScans();
+          } else {
+            showToast('Gagal memperbarui absensi', 'error');
+          }
+        } else {
+          const newRecord = {
+            id: Date.now().toString(),
+            rfid: rfidValue,
+            nama: student.nama,
+            kelas: student.kelas,
+            jam1: jamPeriode === 'jam1' ? currentTimeStr : '',
+            jam2: jamPeriode === 'jam2' ? currentTimeStr : '',
+            jam3: jamPeriode === 'jam3' ? currentTimeStr : '',
+            tanggal: today,
+            waktu_scan: currentTimeStr,
+            status: 'Hadir',
+            type: 'attendance'
+          };
+
+          const createResult = await window.dataSdk.create(newRecord);
+          
+          if (createResult.isOk) {
+            showToast(`✅ ${student.nama} - ${jamPeriode.toUpperCase().replace('JAM', 'Jam ')} berhasil dicatat (${currentTimeStr})`, 'success');
+            rfidAutoInput.value = '';
+            updateRecentScans();
+          } else {
+            showToast('Gagal menyimpan absensi', 'error');
+          }
+        }
+
+        scanInProgress = false;
+        rfidAutoInput.disabled = false;
+        rfidAutoInput.focus();
+      };
+
+      rfidAutoInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handleAutoScan();
+        }
+      });
+    }
+
+    function startClock() {
+      function updateClock() {
+        const now = new Date();
+        const timeString = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const dateString = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        
+        const clockEl = document.getElementById('clock');
+        const dateEl = document.getElementById('date');
+        
+        if (clockEl) clockEl.textContent = timeString;
+        if (dateEl) dateEl.textContent = dateString;
+      }
+
+      updateClock();
+      setInterval(updateClock, 1000);
+    }
+
+    function updateRecentScans() {
+      const today = getCurrentDate();
+      const todayScans = allRecords
+        .filter(r => r.tanggal === today && r.type === 'attendance')
+        .sort((a, b) => {
+          const timeA = a.waktu_scan || '00:00:00';
+          const timeB = b.waktu_scan || '00:00:00';
+          return timeB.localeCompare(timeA);
+        })
+        .slice(0, 5);
+
+      const recentScansList = document.getElementById('recent-scans-list');
+      
+      if (!recentScansList) return;
+
+      if (todayScans.length === 0) {
+        recentScansList.innerHTML = '<p class="text-gray-500 text-center">Belum ada scan hari ini</p>';
+        return;
+      }
+
+      recentScansList.innerHTML = todayScans.map(scan => `
+        <div class="bg-gray-50 rounded-lg p-3 flex justify-between items-center">
+          <div>
+            <p class="font-semibold text-gray-800">${scan.nama}</p>
+            <p class="text-sm text-gray-600">Kelas ${scan.kelas} - ${scan.rfid}</p>
+          </div>
+          <div class="text-right">
+            <p class="text-sm font-semibold text-indigo-600">${scan.waktu_scan}</p>
+            <p class="text-xs text-gray-500">
+              ${scan.jam1 ? 'Jam 1 ' : ''}${scan.jam2 ? 'Jam 2 ' : ''}${scan.jam3 ? 'Jam 3' : ''}
+            </p>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function attachAbsensiListeners() {
+      const filterKelasSelect = document.getElementById('filter-kelas');
+      const filterTanggalInput = document.getElementById('filter-tanggal');
+      const addManualBtn = document.getElementById('add-manual-btn');
+      const syncSheetsBtn = document.getElementById('sync-sheets-btn');
+      const exportBtn = document.getElementById('export-btn');
+
+      filterKelasSelect.value = filterKelas;
+      filterTanggalInput.value = filterTanggal;
+
+      filterKelasSelect.addEventListener('change', (e) => {
+        filterKelas = e.target.value;
+        renderContent();
+      });
+
+      filterTanggalInput.addEventListener('change', (e) => {
+        filterTanggal = e.target.value;
+        renderContent();
+      });
+
+      addManualBtn.addEventListener('click', () => {
+        document.getElementById('manual-modal').classList.remove('hidden');
+      });
+
+      syncSheetsBtn.addEventListener('click', async () => {
+        const attendanceRecords = allRecords.filter(r => r.type === 'attendance');
+        
+        if (attendanceRecords.length === 0) {
+          showToast('Tidak ada data absensi untuk dikirim', 'error');
+          return;
+        }
+
+        syncSheetsBtn.disabled = true;
+        const syncText = document.getElementById('sync-sheets-text');
+        const originalText = syncText.textContent;
+        syncText.innerHTML = '<svg class="animate-spin h-5 w-5 inline mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Mengirim...';
+
+        try {
+          await sendToGoogleSheets(attendanceRecords);
+          
+          showToast(`✅ ${attendanceRecords.length} data absensi berhasil dikirim ke Google Sheets!`, 'success');
+          
+          syncText.textContent = originalText;
+          syncSheetsBtn.disabled = false;
+        } catch (error) {
+          showToast('❌ Gagal mengirim data ke Google Sheets. Data tetap tersimpan di Canva.', 'error');
+          syncText.textContent = originalText;
+          syncSheetsBtn.disabled = false;
+        }
+      });
+
+      const cancelManualBtn = document.getElementById('cancel-manual-btn');
+      cancelManualBtn.addEventListener('click', () => {
+        document.getElementById('manual-modal').classList.add('hidden');
+      });
+
+      const saveManualBtn = document.getElementById('save-manual-btn');
+      saveManualBtn.addEventListener('click', async () => {
+        const studentRfid = document.getElementById('manual-student').value;
+        const jamPeriode = document.getElementById('manual-jam').value;
+        const status = document.getElementById('manual-status').value;
+        const tanggal = document.getElementById('manual-tanggal').value;
+
+        if (!studentRfid) {
+          showToast('Pilih siswa terlebih dahulu!', 'error');
+          return;
+        }
+
+        saveManualBtn.disabled = true;
+
+        const student = STUDENTS_DATA.find(s => s.rfid === studentRfid);
+        const existingRecord = allRecords.find(r => 
+          r.rfid === studentRfid && r.tanggal === tanggal && r.type === 'attendance'
+        );
+
+        const currentTimeStr = getCurrentTime();
+        const statusMark = status === 'Hadir' ? currentTimeStr : status;
+
+        if (existingRecord) {
+          if (existingRecord[jamPeriode] && existingRecord[jamPeriode] !== '') {
+            showToast(`${student.nama} sudah tercatat ${jamPeriode.toUpperCase().replace('JAM', 'Jam ')} dengan status: ${existingRecord[jamPeriode]}`, 'error');
+            saveManualBtn.disabled = false;
+            return;
+          }
+
+          existingRecord[jamPeriode] = statusMark;
+          existingRecord.waktu_scan = currentTimeStr;
+          existingRecord.status = status;
+          
+          const updateResult = await window.dataSdk.update(existingRecord);
+          
+          if (updateResult.isOk) {
+            showToast(`✅ Absensi ${student.nama} - ${jamPeriode.toUpperCase().replace('JAM', 'Jam ')} (${status}) berhasil disimpan`, 'success');
+            document.getElementById('manual-modal').classList.add('hidden');
+            renderContent();
+          } else {
+            showToast('Gagal memperbarui absensi', 'error');
+          }
+        } else {
+          const newRecord = {
+            id: Date.now().toString(),
+            rfid: studentRfid,
+            nama: student.nama,
+            kelas: student.kelas,
+            jam1: jamPeriode === 'jam1' ? statusMark : '',
+            jam2: jamPeriode === 'jam2' ? statusMark : '',
+            jam3: jamPeriode === 'jam3' ? statusMark : '',
+            tanggal: tanggal,
+            waktu_scan: currentTimeStr,
+            status: status,
+            type: 'attendance'
+          };
+
+          const createResult = await window.dataSdk.create(newRecord);
+          
+          if (createResult.isOk) {
+            showToast(`✅ Absensi ${student.nama} - ${jamPeriode.toUpperCase().replace('JAM', 'Jam ')} (${status}) berhasil disimpan`, 'success');
+            document.getElementById('manual-modal').classList.add('hidden');
+            renderContent();
+          } else {
+            showToast('Gagal menyimpan absensi', 'error');
+          }
+        }
+
+        saveManualBtn.disabled = false;
+      });
+
+      const deleteRecordBtns = document.querySelectorAll('.delete-record-btn');
+      deleteRecordBtns.forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const recordId = btn.dataset.id;
+          const record = allRecords.find(r => r.id === recordId);
+          
+          if (!record) return;
+
+          btn.disabled = true;
+
+          const deleteResult = await window.dataSdk.delete(record);
+          
+          if (deleteResult.isOk) {
+            showToast('Data absensi berhasil dihapus', 'success');
+            renderContent();
+          } else {
+            showToast('Gagal menghapus data absensi', 'error');
+          }
+
+          btn.disabled = false;
+        });
+      });
+
+      exportBtn.addEventListener('click', () => {
+        const filteredRecords = allRecords
+          .filter(r => r.type === 'attendance')
+          .filter(r => filterKelas === 'all' || r.kelas === filterKelas)
+          .filter(r => !filterTanggal || r.tanggal === filterTanggal);
+
+        let csv = 'No,RFID,Nama Siswa,Kelas,Jam 1,Jam 2,Jam 3,Status,Tanggal,Waktu Scan\n';
+        
+        filteredRecords.forEach((record, index) => {
+          csv += `${index + 1},"${record.rfid}","${record.nama}","${record.kelas}","${record.jam1}","${record.jam2}","${record.jam3}","${record.status}","${record.tanggal}","${record.waktu_scan}"\n`;
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        
+        link.setAttribute('href', url);
+        link.setAttribute('download', `absensi_${getCurrentDate()}.csv`);
+        link.style.visibility = 'hidden';
+        
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        showToast('Data berhasil diexport!', 'success');
+      });
+    }
+
+    function attachRekapListeners() {
+      const rekapBulanInput = document.getElementById('rekap-bulan');
+      const syncRekapBtn = document.getElementById('sync-rekap-btn');
+      
+      rekapBulanInput.addEventListener('change', () => {
+        renderContent();
+      });
+
+      syncRekapBtn.addEventListener('click', async () => {
+        const selectedMonth = rekapBulanInput.value;
+        const monthRecords = allRecords.filter(r => r.tanggal.startsWith(selectedMonth) && r.type === 'attendance');
+
+        const studentStats = STUDENTS_DATA.map(student => {
+          const records = monthRecords.filter(r => r.rfid === student.rfid);
+          
+          let jam1Hadir = 0, jam1Sakit = 0, jam1Izin = 0;
+          let jam2Hadir = 0, jam2Sakit = 0, jam2Izin = 0;
+          let jam3Hadir = 0, jam3Sakit = 0, jam3Izin = 0;
+          
+          records.forEach(r => {
+            if (r.jam1) {
+              if (r.jam1 === 'Hadir' || (r.jam1 !== 'Sakit' && r.jam1 !== 'Izin')) {
+                jam1Hadir++;
+              } else if (r.jam1 === 'Sakit') {
+                jam1Sakit++;
+              } else if (r.jam1 === 'Izin') {
+                jam1Izin++;
+              }
+            }
+            
+            if (r.jam2) {
+              if (r.jam2 === 'Hadir' || (r.jam2 !== 'Sakit' && r.jam2 !== 'Izin')) {
+                jam2Hadir++;
+              } else if (r.jam2 === 'Sakit') {
+                jam2Sakit++;
+              } else if (r.jam2 === 'Izin') {
+                jam2Izin++;
+              }
+            }
+            
+            if (r.jam3) {
+              if (r.jam3 === 'Hadir' || (r.jam3 !== 'Sakit' && r.jam3 !== 'Izin')) {
+                jam3Hadir++;
+              } else if (r.jam3 === 'Sakit') {
+                jam3Sakit++;
+              } else if (r.jam3 === 'Izin') {
+                jam3Izin++;
+              }
+            }
+          });
+
+          const totalHadir = jam1Hadir + jam2Hadir + jam3Hadir;
+          const totalSakit = jam1Sakit + jam2Sakit + jam3Sakit;
+          const totalIzin = jam1Izin + jam2Izin + jam3Izin;
+
+          return { 
+            ...student, 
+            jam1: { hadir: jam1Hadir, sakit: jam1Sakit, izin: jam1Izin },
+            jam2: { hadir: jam2Hadir, sakit: jam2Sakit, izin: jam2Izin },
+            jam3: { hadir: jam3Hadir, sakit: jam3Sakit, izin: jam3Izin },
+            total: { hadir: totalHadir, sakit: totalSakit, izin: totalIzin }
+          };
+        });
+
+        if (studentStats.length === 0) {
+          showToast('Tidak ada data rekap untuk dikirim', 'error');
+          return;
+        }
+
+        syncRekapBtn.disabled = true;
+        const syncText = document.getElementById('sync-rekap-text');
+        const originalText = syncText.textContent;
+        syncText.innerHTML = '<svg class="animate-spin h-5 w-5 inline mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Mengirim...';
+
+        try {
+          await sendRekapToGoogleSheets(studentStats, selectedMonth);
+          
+          showToast(`✅ Rekap bulan ${selectedMonth} berhasil dikirim ke Google Sheets!`, 'success');
+          
+          syncText.textContent = originalText;
+          syncRekapBtn.disabled = false;
+        } catch (error) {
+          showToast('❌ Gagal mengirim rekap ke Google Sheets. Coba lagi nanti.', 'error');
+          syncText.textContent = originalText;
+          syncRekapBtn.disabled = false;
+        }
+      });
+    }
+
+    function attachSiswaListeners() {
+      const addStudentBtn = document.getElementById('add-student-btn');
+      
+      addStudentBtn.addEventListener('click', () => {
+        document.getElementById('student-modal').classList.remove('hidden');
+      });
+
+      const cancelStudentBtn = document.getElementById('cancel-student-btn');
+      cancelStudentBtn.addEventListener('click', () => {
+        document.getElementById('student-modal').classList.add('hidden');
+      });
+
+      const saveStudentBtn = document.getElementById('save-student-btn');
+      saveStudentBtn.addEventListener('click', async () => {
+        const rfid = document.getElementById('new-rfid').value.trim();
+        const nama = document.getElementById('new-nama').value.trim();
+        const kelas = document.getElementById('new-kelas').value;
+
+        if (!rfid || !nama) {
+          showToast('Lengkapi semua data siswa!', 'error');
+          return;
+        }
+
+        const exists = STUDENTS_DATA.some(s => s.rfid === rfid);
+        if (exists) {
+          showToast('RFID sudah terdaftar!', 'error');
+          return;
+        }
+
+        saveStudentBtn.disabled = true;
+
+        const newStudent = {
+          id: Date.now().toString(),
+          rfid: rfid,
+          nama: nama,
+          kelas: kelas,
+          type: 'student'
+        };
+
+        const createResult = await window.dataSdk.create(newStudent);
+        
+        if (createResult.isOk) {
+          STUDENTS_DATA.push({ rfid, nama, kelas });
+          showToast(`Siswa ${nama} berhasil ditambahkan`, 'success');
+          document.getElementById('student-modal').classList.add('hidden');
+          renderContent();
+        } else {
+          showToast('Gagal menambahkan siswa', 'error');
+        }
+
+        saveStudentBtn.disabled = false;
+      });
+    }
+
+    const dataHandler = {
+      onDataChanged(data) {
+        allRecords = data;
+        
+        if (currentPage === 'scan') {
+          updateRecentScans();
+        } else if (currentPage === 'dashboard' || currentPage === 'absensi' || currentPage === 'rekap') {
+          renderContent();
+        }
+      }
+    };
+
+    async function onConfigChange(config) {
+      const titleElements = document.querySelectorAll('h1');
+      titleElements.forEach(el => {
+        if (el.textContent.includes('MA AR-RIDHO') || el.textContent === defaultConfig.school_name) {
+          el.textContent = config.school_name || defaultConfig.school_name;
+        }
+      });
+
+      const instructionElements = document.querySelectorAll('h2');
+      instructionElements.forEach(el => {
+        if (el.textContent === defaultConfig.scan_instruction) {
+          el.textContent = config.scan_instruction || defaultConfig.scan_instruction;
+        }
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      if (window.elementSdk) {
+        window.elementSdk.init({
+          defaultConfig,
+          onConfigChange,
+          mapToCapabilities: () => ({
+            recolorables: [],
+            borderables: [],
+            fontEditable: undefined,
+            fontSizeable: undefined
+          }),
+          mapToEditPanelValues: (config) => new Map([
+            ['school_name', config.school_name || defaultConfig.school_name],
+            ['scan_instruction', config.scan_instruction || defaultConfig.scan_instruction]
+          ])
+        });
+      }
+
+      if (window.dataSdk) {
+        const initResult = await window.dataSdk.init(dataHandler);
+        if (!initResult.isOk) {
+          showToast('Gagal menginisialisasi database', 'error');
+        }
+      }
+
+      render();
+    });
+  </script>
+ <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9a9872a3c5a1f7a6',t:'MTc2NDk4OTEzMy4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
